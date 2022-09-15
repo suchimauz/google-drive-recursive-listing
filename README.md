@@ -66,6 +66,9 @@ We follow the link, select our account, click "Continue" and put all the checkma
 http://localhost/?state=state-token&code=<code>&scope=https://www.googleapis.com/auth/drive.metadata.readonly%20https://www.googleapis.com/auth/spreadsheets
 ```
 
+
+We need to copy everything between code= and &, paste the resulting string ```<code>``` into the console and press Enter. After that the program will start, and if at the end you get the message: ```Done. Spreadsheet is successfully updated```, so your Google spreadsheet has been updated
+
 Нам нужно скопировать все что находится между code= и &, вставить полученную строку ```<code>``` в консоль и нажать Enter. После чего программа запустится, и если в конце вы получили сообщение: ```Done. Spreadsheet is successfully updated```, значит ваша Google таблица обновилась
 
 # Example | Пример
