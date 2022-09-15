@@ -207,4 +207,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to retrieve data from sheet. %v", err)
 	}
+
+	fmt.Print("Done. Spreadsheet is successfully updated")
 }
