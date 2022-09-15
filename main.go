@@ -9,6 +9,8 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/joho/godotenv"
+	"github.com/kelseyhightower/envconfig"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
@@ -17,6 +19,11 @@ import (
 )
 
 var sheetColumns = []string{"A", "B", "C"}
+
+type Config struct {
+	RootDirectoryId string `envconfig:"root_directory_id" required:"true"`
+	SpreadsheetId   string `envconfig:"spreadsheet_id" required:"true"`
+}
 
 // Retrieve a token, saves the token, then returns the generated client.
 func getClient(config *oauth2.Config) *http.Client {
@@ -121,6 +128,16 @@ func filesRecurPrint(filesList *drive.FilesListCall, files []*drive.File, tw *ta
 }
 
 func main() {
+	var cfg Config
+
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Unable to read .env: %s", err.Error())
+	}
+
+	if err := envconfig.Process("", &cfg); err != nil {
+		log.Fatalf("Unable to read config: %s", err.Error())
+	}
+
 	ctx := context.Background()
 	b, err := os.ReadFile("credentials.json")
 	if err != nil {
@@ -141,8 +158,10 @@ func main() {
 
 	filesList := driveSrv.Files.List()
 
+	qFilter := fmt.Sprintf("'%s' in parents", cfg.RootDirectoryId)
+
 	r, err := filesList.
-		Q("'1biFdT51Jhe034h35mZqfVfI3TIvMqQn7' in parents").
+		Q(qFilter).
 		Fields("nextPageToken, files").Do()
 	if err != nil {
 		log.Fatalf("filesList: %s", err.Error())
@@ -164,9 +183,7 @@ func main() {
 		log.Fatalf("Unable to retrieve Sheets client: %v", err)
 	}
 
-	spreadsheetId := "1VNNFIjN0JyFFCbtHxijb3T6DOx7NvGJy8w4LHkIWVBk"
-
-	_, err = sheetsSrv.Spreadsheets.Values.Clear(spreadsheetId, makeTableRange(1, 1000), &sheets.ClearValuesRequest{}).Do()
+	_, err = sheetsSrv.Spreadsheets.Values.Clear(cfg.SpreadsheetId, makeTableRange(1, 1000), &sheets.ClearValuesRequest{}).Do()
 
 	valueInputOption := "RAW"
 
@@ -186,7 +203,7 @@ func main() {
 		Data:             data,
 	}
 
-	_, err = sheetsSrv.Spreadsheets.Values.BatchUpdate(spreadsheetId, rb).Context(ctx).Do()
+	_, err = sheetsSrv.Spreadsheets.Values.BatchUpdate(cfg.SpreadsheetId, rb).Context(ctx).Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve data from sheet. %v", err)
 	}
