@@ -13,7 +13,10 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
+	"google.golang.org/api/sheets/v4"
 )
+
+var sheetColumns = []string{"A", "B", "C"}
 
 // Retrieve a token, saves the token, then returns the generated client.
 func getClient(config *oauth2.Config) *http.Client {
@@ -33,7 +36,7 @@ func getClient(config *oauth2.Config) *http.Client {
 func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
+		"\n%v\nauthorization code: ", authURL)
 
 	var authCode string
 	if _, err := fmt.Scan(&authCode); err != nil {
@@ -70,6 +73,40 @@ func saveToken(path string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
+func makeTableRange(start int, i ...int) string {
+	if len(i) == 0 {
+		return fmt.Sprintf("%s%s", sheetColumns[start-1], fmt.Sprint(start))
+	}
+
+	end := i[0]
+	cols := 3
+
+	if len(i) > 1 {
+		cols = i[1]
+	}
+	return fmt.Sprintf("%s%s:%s%s", sheetColumns[0], fmt.Sprint(start), sheetColumns[cols-1], fmt.Sprint(end))
+}
+
+func makeRow(vals ...interface{}) []interface{} {
+	var iVals []interface{}
+	for _, val := range vals {
+		iVals = append(iVals, val)
+	}
+	return iVals
+}
+
+func filesRecurSpreadSheet(filesList *drive.FilesListCall, files []*drive.File, vals *[][]interface{}, dir string) {
+	for _, f := range files {
+		filePath := fmt.Sprintf("%s%s", dir, f.Name)
+		*vals = append(*vals, makeRow(f.Name, filePath, f.WebViewLink))
+		localQ := fmt.Sprintf("'%s' in parents", f.Id)
+		localFiles, _ := filesList.Q(localQ).Fields("nextPageToken, files").Do()
+		if len(localFiles.Files) > 0 {
+			filesRecurSpreadSheet(filesList, localFiles.Files, vals, fmt.Sprintf("%s%s", filePath, "/"))
+		}
+	}
+}
+
 func filesRecurPrint(filesList *drive.FilesListCall, files []*drive.File, tw *tabwriter.Writer, dir string) {
 	for _, f := range files {
 		filePath := fmt.Sprintf("%s%s", dir, f.Name)
@@ -91,25 +128,24 @@ func main() {
 	}
 
 	// If modifying these scopes, delete your previously saved token.json.
-	config, err := google.ConfigFromJSON(b, drive.DriveMetadataReadonlyScope)
+	config, err := google.ConfigFromJSON(b, sheets.SpreadsheetsScope, drive.DriveMetadataReadonlyScope)
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
 	client := getClient(config)
 
-	srv, err := drive.NewService(ctx, option.WithHTTPClient(client))
+	driveSrv, err := drive.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatalf("Unable to retrieve Drive client: %v", err)
 	}
 
-	filesList := srv.Files.List()
+	filesList := driveSrv.Files.List()
 
 	r, err := filesList.
 		Q("'1biFdT51Jhe034h35mZqfVfI3TIvMqQn7' in parents").
 		Fields("nextPageToken, files").Do()
 	if err != nil {
-		log.Print("Root directory is empty!")
-		return
+		log.Fatalf("filesList: %s", err.Error())
 	}
 	if len(r.Files) == 0 {
 		log.Print("Root directory is empty!")
@@ -120,4 +156,38 @@ func main() {
 	fmt.Fprintln(w, "Имя\tПуть\tURL")
 	filesRecurPrint(filesList, r.Files, w, "/")
 	w.Flush()
+
+	// Integration of
+	// Spreadsheets
+	sheetsSrv, err := sheets.NewService(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		log.Fatalf("Unable to retrieve Sheets client: %v", err)
+	}
+
+	spreadsheetId := "1VNNFIjN0JyFFCbtHxijb3T6DOx7NvGJy8w4LHkIWVBk"
+
+	_, err = sheetsSrv.Spreadsheets.Values.Clear(spreadsheetId, makeTableRange(1, 1000), &sheets.ClearValuesRequest{}).Do()
+
+	valueInputOption := "RAW"
+
+	var values [][]interface{}
+	values = append(values, makeRow("Имя", "Путь", "URL"))
+
+	filesRecurSpreadSheet(filesList, r.Files, &values, "/")
+
+	data := []*sheets.ValueRange{}
+	data = append(data, &sheets.ValueRange{
+		Range:  makeTableRange(1, len(values)),
+		Values: values,
+	})
+
+	rb := &sheets.BatchUpdateValuesRequest{
+		ValueInputOption: valueInputOption,
+		Data:             data,
+	}
+
+	_, err = sheetsSrv.Spreadsheets.Values.BatchUpdate(spreadsheetId, rb).Context(ctx).Do()
+	if err != nil {
+		log.Fatalf("Unable to retrieve data from sheet. %v", err)
+	}
 }
