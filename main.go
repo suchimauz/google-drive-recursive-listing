@@ -1,5 +1,123 @@
 package main
 
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"text/tabwriter"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/option"
+)
+
+// Retrieve a token, saves the token, then returns the generated client.
+func getClient(config *oauth2.Config) *http.Client {
+	// The file token.json stores the user's access and refresh tokens, and is
+	// created automatically when the authorization flow completes for the first
+	// time.
+	tokFile := "token.json"
+	tok, err := tokenFromFile(tokFile)
+	if err != nil {
+		tok = getTokenFromWeb(config)
+		saveToken(tokFile, tok)
+	}
+	return config.Client(context.Background(), tok)
+}
+
+// Request a token from the web, then returns the retrieved token.
+func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
+	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	fmt.Printf("Go to the following link in your browser then type the "+
+		"authorization code: \n%v\n", authURL)
+
+	var authCode string
+	if _, err := fmt.Scan(&authCode); err != nil {
+		log.Fatalf("Unable to read authorization code %v", err)
+	}
+
+	tok, err := config.Exchange(context.TODO(), authCode)
+	if err != nil {
+		log.Fatalf("Unable to retrieve token from web %v", err)
+	}
+	return tok
+}
+
+// Retrieves a token from a local file.
+func tokenFromFile(file string) (*oauth2.Token, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	tok := &oauth2.Token{}
+	err = json.NewDecoder(f).Decode(tok)
+	return tok, err
+}
+
+// Saves a token to a file path.
+func saveToken(path string, token *oauth2.Token) {
+	fmt.Printf("Saving credential file to: %s\n", path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		log.Fatalf("Unable to cache oauth token: %v", err)
+	}
+	defer f.Close()
+	json.NewEncoder(f).Encode(token)
+}
+
+func filesRecurPrint(filesList *drive.FilesListCall, files []*drive.File, tw *tabwriter.Writer, dir string) {
+	for _, f := range files {
+		filePath := fmt.Sprintf("%s%s", dir, f.Name)
+		rowString := fmt.Sprintf("%s\t%s\t%s", f.Name, filePath, f.WebViewLink)
+		fmt.Fprintln(tw, rowString)
+		localQ := fmt.Sprintf("'%s' in parents", f.Id)
+		localFiles, _ := filesList.Q(localQ).Fields("nextPageToken, files").Do()
+		if len(localFiles.Files) > 0 {
+			filesRecurPrint(filesList, localFiles.Files, tw, fmt.Sprintf("%s%s", filePath, "/"))
+		}
+	}
+}
+
 func main() {
-	print("Hello world!")
+	ctx := context.Background()
+	b, err := os.ReadFile("credentials.json")
+	if err != nil {
+		log.Fatalf("Unable to read client secret file: %v", err)
+	}
+
+	// If modifying these scopes, delete your previously saved token.json.
+	config, err := google.ConfigFromJSON(b, drive.DriveMetadataReadonlyScope)
+	if err != nil {
+		log.Fatalf("Unable to parse client secret file to config: %v", err)
+	}
+	client := getClient(config)
+
+	srv, err := drive.NewService(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		log.Fatalf("Unable to retrieve Drive client: %v", err)
+	}
+
+	filesList := srv.Files.List()
+
+	r, err := filesList.
+		Q("'1biFdT51Jhe034h35mZqfVfI3TIvMqQn7' in parents").
+		Fields("nextPageToken, files").Do()
+	if err != nil {
+		log.Print("Root directory is empty!")
+		return
+	}
+	if len(r.Files) == 0 {
+		log.Print("Root directory is empty!")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
+	fmt.Fprintln(w, "Имя\tПуть\tURL")
+	filesRecurPrint(filesList, r.Files, w, "/")
+	w.Flush()
 }
