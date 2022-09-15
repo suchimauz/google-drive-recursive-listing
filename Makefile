@@ -12,3 +12,6 @@ run:
 
 lint:
 	golangci-lint run
+
+env:
+	cp .env.dist .env
